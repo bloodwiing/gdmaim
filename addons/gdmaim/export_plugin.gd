@@ -7,6 +7,7 @@ const GodotFiles := preload("godot_files.gd")
 const ScriptObfuscator := preload("obfuscator/script/script_obfuscator.gd")
 const ResourceObfuscator := preload("obfuscator/resource/resource_obfuscator.gd")
 const SymbolTable := preload("obfuscator/symbol_table.gd")
+const PropertyTree := preload("obfuscator/resource/property_tree.gd")
 const Tokenizer := preload("obfuscator/script/tokenizer/tokenizer.gd")
 const Token := preload("obfuscator/script/tokenizer/token.gd")
 
@@ -25,6 +26,7 @@ var _scripts_last_modification : Dictionary
 var _autoloads : Dictionary
 var _class_symbols : Dictionary
 var _symbols : SymbolTable
+var _property_tree : PropertyTree
 var _src_obfuscators : Dictionary
 var _res_obfuscators : Dictionary
 var _inject_autoload : String
@@ -65,6 +67,7 @@ func _export_begin(features : PackedStringArray, is_debug : bool, path : String,
 	_res_obfuscators.clear()
 	
 	_symbols = SymbolTable.new(settings)
+	_property_tree = PropertyTree.new()
 	
 	_inject_autoload = ""
 	if settings.source_map_inject_name:
@@ -234,7 +237,7 @@ func _export_file(path : String, type : String, features : PackedStringArray) ->
 		add_file(path, FileAccess.get_file_as_bytes(path), true) #HACK
 	elif ext == "tres" or ext == "tscn":
 		if settings.obfuscate_export_vars or ext == "tscn":
-			var data : String = _obfuscate_resource(path, FileAccess.get_file_as_string(path))
+			var data : String = _obfuscate_resource(path)
 			skip()
 			add_file(path, data.to_utf8_buffer(), false)
 			#var binary_data : PackedByteArray = _convert_text_to_binary_resource(ext, data) if _convert_text_resources_to_binary and path.contains("MapPractice") else PackedByteArray()
@@ -291,6 +294,7 @@ func _parse_script(path : String) -> void:
 		var script : Script = load(path)
 		source_code = script.source_code
 	elif path.ends_with(".tscn"):
+		_parse_scene(path)
 		as_embedded = true
 		var file : FileAccess = FileAccess.open(path, FileAccess.READ)
 		var data : String = file.get_as_text()
@@ -321,6 +325,20 @@ func _parse_script(path : String) -> void:
 	_Logger.write("\nAbstract Syntax Tree\n" + obfuscator._ast.print_tree(-1))
 	
 	_Logger.write("\n---------- " + " Resolving symbols " + path + " ----------\n")
+
+
+func _parse_scene(path : String) -> void:
+	if not path.ends_with(".tscn"): return
+	
+	var obfuscator := ResourceObfuscator.new(path)
+	_res_obfuscators[path] = obfuscator
+	
+	_Logger.swap(obfuscator)
+	_Logger.write("---------- " + " Parsing scene " + path + " ----------\n")
+	
+	var source_code : String = FileAccess.get_file_as_string(path)
+	
+	obfuscator.parse(source_code, _property_tree)
 
 
 func _obfuscate_script(path : String) -> String:
@@ -356,9 +374,13 @@ func _obfuscate_script(path : String) -> String:
 	return obfuscator.generate_source_code()
 
 
-func _obfuscate_resource(path : String, source_data : String) -> String:
-	var obfuscator := ResourceObfuscator.new(path)
-	_res_obfuscators[path] = obfuscator
+func _obfuscate_resource(path : String) -> String:
+	var obfuscator : ResourceObfuscator = _res_obfuscators.get(path)
+	
+	if not obfuscator:
+		obfuscator = ResourceObfuscator.new(path)
+		_res_obfuscators[path] = obfuscator
+		obfuscator.parse(FileAccess.get_file_as_string(path), _property_tree)
 	
 	var code : String
 	if _src_obfuscators.has(path):
@@ -366,9 +388,9 @@ func _obfuscate_resource(path : String, source_data : String) -> String:
 		_src_obfuscators.erase(path) #Resource map consumed
 	
 	_Logger.swap(obfuscator)
-	_Logger.write("---------- " + " Obfuscating resource " + path + " ----------\n")
+	_Logger.write("\n---------- " + " Obfuscating resource " + path + " ----------\n")
 	
-	obfuscator.run(source_data, _symbols)
+	obfuscator.run(_symbols)
 	
 	if !code.is_empty():
 		var data : String = obfuscator.get_data()

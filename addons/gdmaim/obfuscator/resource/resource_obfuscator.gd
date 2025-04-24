@@ -228,15 +228,14 @@ func run(symbol_table : SymbolTable) -> bool:
 				
 				if _dependency_tree.has(node_path):
 					inst_scene_path_root = _dependency_tree[node_path]
-				
-				if inst_scene_path_root == "." and not _dependency_roots.has("."):
-					push_error(_dependency_roots, ' ', _dependency_tree, ' ', inst_scene_path_root, ' ', node_path, ' ', str(i+1), ' ', node_parent, ' ', node_name, ' ', path)
-					push_error("hi")
-					push_error("\n\n\n\n\n")
 					
 				var inst_scene : String = _dependency_roots[inst_scene_path_root]
-				var inst_scene_prefix : String = inst_scene_path_root.rsplit("/", false, 1)[0]
-				var inst_scene_relative_path : String = node_path.substr(inst_scene_prefix.length()+1)
+				var inst_scene_relative_path : String = node_path.substr(inst_scene_path_root.length()+1)
+				
+				if inst_scene_relative_path.is_empty():
+					inst_scene_relative_path = '.'
+				else:
+					inst_scene_relative_path = './' + inst_scene_relative_path
 				
 				for key in _property_tree.get_key_list(inst_scene, inst_scene_relative_path):
 					if !overwritten_keys.has(key):

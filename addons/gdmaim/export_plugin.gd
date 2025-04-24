@@ -313,6 +313,7 @@ func _parse_script(path : String) -> void:
 	_Logger.swap(obfuscator)
 	_Logger.clear()
 	_Logger.write("Export log for '" + path + "'\n")
+	
 	if as_embedded:
 		_Logger.write("---------- " + " Parsing script embedded " + path + " ----------")
 	else:

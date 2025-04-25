@@ -10,33 +10,68 @@ var path : String
 
 var _source_data : String
 var _data : String
+var _seed : int
 
 var _property_tree : PropertyTree
-var _dependency_roots : Dictionary
-var _dependency_tree : Dictionary
-var _ext_resources : Dictionary
+
+var _ext_scenes : Dictionary
+var _ext_resources_by_uid : Dictionary  # optimisation
+var _sub_resources_by_id : Dictionary  # collision check
+
+var _scene_data : PropertyTree.SceneData
+
+var _imported_ext_resources_by_uid : Dictionary
+var _imported_sub_resources_by_id : Dictionary  # collision check
+var _ext_resources_count : int = 0
+var _sub_resources_count : int = 0
+
+var _imported_ext_resources_code : String = ""
+var _imported_sub_resources_code : String = ""
 
 
 func _init(path : String) -> void:
 	self.path = path
+	_seed = hash(str(_Settings.current.symbol_seed if !_Settings.current.symbol_dynamic_seed else int(Time.get_unix_time_from_system())))
+
+
+func _parse_property(token : String) -> PropertyTree.ResourceProperty:
+	var ref_id : String
+	
+	if token.begins_with('ExtResource("'):
+		ref_id = _get_string_value(token)
+		var prop := PropertyTree.ResourcePropertyExtRef.new(ref_id)
+		prop.ext_res = weakref(_scene_data.get_ext_resource(ref_id))
+		return prop
+	elif token.begins_with('SubResource("'):
+		ref_id = _get_string_value(token)
+		var prop := PropertyTree.ResourcePropertySubRef.new(ref_id)
+		prop.sub_res = weakref(_scene_data.get_sub_resource(ref_id))
+		return prop
+	else:
+		return PropertyTree.ResourceProperty.new(token)
 
 
 func parse(source_data : String, property_tree : PropertyTree) -> void:
 	_source_data = source_data
 	_property_tree = property_tree
-	_dependency_roots.clear()
-	_ext_resources.clear()
+	_ext_resources_by_uid.clear()
+	_sub_resources_by_id.clear()
+	_ext_scenes.clear()
+	
+	_scene_data = property_tree.get_scene(path)
 	
 	var lines : PackedStringArray = _source_data.split("\n")
 	var i : int = 0
 	while i < lines.size():
 		var line : String = lines[i]
 		
-		if line.begins_with("[ext_resource") and line.contains('type="PackedScene"'):
+		if line.begins_with("[ext_resource"):
 			var tokens : PackedStringArray = line.split(" ", false)
 			
 			var resource_path : String
 			var resource_id : String
+			var resource_uid : String
+			var resource_type : String
 			
 			var token_i : int = 0
 			while token_i < tokens.size():
@@ -52,12 +87,68 @@ func parse(source_data : String, property_tree : PropertyTree) -> void:
 					while !token.ends_with('"') and token_j < tokens.size(): token += ' ' + tokens[token_j]; token_j += 1
 					resource_id = _get_string_value(token)
 					if resource_id.is_empty(): continue
+				elif token.begins_with('uid="'):
+					while !token.ends_with('"') and token_j < tokens.size(): token += ' ' + tokens[token_j]; token_j += 1
+					resource_uid = _get_string_value(token)
+					if resource_uid.is_empty(): continue
+				elif token.begins_with('type="'):
+					while !token.ends_with('"') and token_j < tokens.size(): token += ' ' + tokens[token_j]; token_j += 1
+					resource_type = _get_string_value(token)
+					if resource_type.is_empty(): continue
 			
-			if not resource_path.is_empty() and not resource_id.is_empty():
-				_ext_resources[resource_id] = resource_path
+			if not resource_path.is_empty() and not resource_id.is_empty() and resource_type == 'PackedScene':
+				_ext_scenes[resource_id] = resource_path
 				_Logger.write(str(i+1) + " detected scene import " + resource_path + ' as "' + resource_id + '"')
 			
+			_Logger.write(str(i+1) + ' [ExtResource type="' + resource_type + '" id="' + resource_id + '"]')
+			
+			_scene_data.add_ext_resource(resource_path, resource_uid, resource_type, resource_id)
+			_ext_resources_by_uid[resource_uid] = _scene_data.get_ext_resource(resource_id)
+			
 			i += 1
+		
+		elif line.begins_with("[sub_resource"):
+			var tokens : PackedStringArray = line.split(" ", false)
+			
+			var resource_id : String
+			var resource_type : String
+			
+			var token_i : int = 0
+			while token_i < tokens.size():
+				var token : String = tokens[token_i]
+				token_i += 1
+				
+				var token_j : int = token_i
+				if token.begins_with('id="'):
+					while !token.ends_with('"') and token_j < tokens.size(): token += ' ' + tokens[token_j]; token_j += 1
+					resource_id = _get_string_value(token)
+					if resource_id.is_empty(): continue
+				elif token.begins_with('type="'):
+					while !token.ends_with('"') and token_j < tokens.size(): token += ' ' + tokens[token_j]; token_j += 1
+					resource_type = _get_string_value(token)
+					if resource_type.is_empty(): continue
+			
+			_scene_data.add_sub_resource(resource_type, resource_id)
+			_sub_resources_by_id[resource_id] = _scene_data.get_sub_resource(resource_id)
+			
+			var j : int = i + 1
+			
+			while j < lines.size():
+				if lines[j].begins_with('['):
+					break
+				
+				line = lines[j]
+				j += 1
+				
+				tokens = line.split(" = ", false, 1)
+				if tokens.size() == 2:
+					_scene_data.add_sub_property(resource_id, tokens[0], _parse_property(tokens[1]))
+			
+			var sub : PropertyTree.SubResource = _scene_data.get_sub_resource(resource_id)
+			
+			_Logger.write(str(i+1) + ' [SubResource type="' + resource_type + '" id="' + resource_id + '"] with ' + str(len(sub.get_properties())) + ' properties')
+			
+			i = j
 		
 		elif line.begins_with("[node"):
 			var tokens : PackedStringArray = line.split(" ", false)
@@ -105,24 +196,24 @@ func parse(source_data : String, property_tree : PropertyTree) -> void:
 				
 				tokens = line.split(" = ", false, 1)
 				if tokens.size() == 2:
-					property_tree.save_property(path, node_path, tokens[0], tokens[1])
+					_scene_data.add_property(node_path, tokens[0], _parse_property(tokens[1]))
 			
 			if node_instance.is_empty():
 				var tree_parent : String = ""
-				for root in _dependency_roots.keys():
+				for root in _scene_data.get_dependent_roots():
 					if node_path.begins_with(root):
 						tree_parent = root
 						break
 				
 				if !tree_parent.is_empty():
-					_dependency_tree[node_path] = tree_parent
-					_Logger.write(str(i+1) + " processed edited node " + node_path + " of " + _dependency_roots[tree_parent])
+					_scene_data.add_dependent_node(tree_parent, node_path)
+					_Logger.write(str(i+1) + " processed edited node " + node_path + " of " + _scene_data.get_dependency(tree_parent))
 				
 				else:
 					_Logger.write(str(i+1) + " processed node " + node_path)
 			else:
-				var node_instantiates_scene : String = _ext_resources[node_instance]
-				_dependency_roots[node_path] = node_instantiates_scene
+				var node_instantiates_scene : String = _ext_scenes[node_instance]
+				_scene_data.add_dependency(node_path, node_instantiates_scene)
 				_Logger.write(str(i+1) + " processed instantiated scene root node " + node_path + " as " + node_instantiates_scene)
 			
 			i = j
@@ -134,8 +225,21 @@ func parse(source_data : String, property_tree : PropertyTree) -> void:
 func run(symbol_table : SymbolTable) -> bool:
 	_data = ""
 	
+	_imported_ext_resources_by_uid.clear()
+	_imported_sub_resources_by_id.clear()
+	_imported_ext_resources_code = ""
+	_imported_sub_resources_code = ""
+	
+	_ext_resources_count = _scene_data.get_ext_resource_count()
+	_sub_resources_count = _scene_data.get_sub_resource_count()
+	
+	var last_ext_resource_pos : int = -1
+	var last_sub_resource_pos : int = -1
+	
 	var lines : PackedStringArray = _source_data.split("\n")
-	var i : int = 0
+	var head_line = lines[0]
+	
+	var i : int = 1
 	while i < lines.size():
 		var line : String = lines[i]
 		if line.begins_with("\""):
@@ -167,8 +271,14 @@ func run(symbol_table : SymbolTable) -> bool:
 						line = _replace_first(line, name, str(new_symbol.name))
 						_Logger.write(str(i+1) + " found symbol '" + name + "' = " + str(new_symbol.name))
 		
+		elif line.begins_with("[sub_resource"):
+			last_sub_resource_pos = _data.length()-1
+		
 		_data += line + "\n"
 		i += 1
+		
+		if line.begins_with("[ext_resource"):
+			last_ext_resource_pos = _data.length()
 		
 		if line.begins_with("[node") or line.begins_with("[sub_resource") or line.begins_with("[resource"):
 			var node_name : String
@@ -204,7 +314,7 @@ func run(symbol_table : SymbolTable) -> bool:
 			var tmp_lines : String
 			var has_script : bool = line.contains("instance=") or line.contains('type="Animation"')
 			var j : int = i
-			var script_i : int = i
+			var script_i : int = i-1
 			var overwritten_keys : Dictionary = {}  # bootleg set
 			while j < lines.size():
 				if lines[j].begins_with("["):
@@ -224,22 +334,13 @@ func run(symbol_table : SymbolTable) -> bool:
 			
 			# Rewrite export vars from instantiated scenes to the parent scenes
 			if is_edited and _Settings.current.strip_editor_annotations:
-				var inst_scene_path_root : String = node_path
-				
-				if _dependency_tree.has(node_path):
-					inst_scene_path_root = _dependency_tree[node_path]
+				var merge_props : Dictionary = recursive_property_inject(node_path, _scene_data)
+				for key in merge_props.keys():
+					if overwritten_keys.has(key): continue
+					var prop : PropertyTree.ResourceProperty = merge_props[key]
+					var value : String = import_property(prop)
 					
-				var inst_scene : String = _dependency_roots[inst_scene_path_root]
-				var inst_scene_relative_path : String = node_path.substr(inst_scene_path_root.length()+1)
-				
-				if inst_scene_relative_path.is_empty():
-					inst_scene_relative_path = '.'
-				else:
-					inst_scene_relative_path = './' + inst_scene_relative_path
-				
-				for key in _property_tree.get_key_list(inst_scene, inst_scene_relative_path):
-					if !overwritten_keys.has(key):
-						lines.insert(script_i+1, key + " = " + _property_tree.get_property(inst_scene, inst_scene_relative_path, key))
+					lines.insert(script_i+1, key+" = "+value)
 			
 			if !has_script:
 				_data += tmp_lines
@@ -277,9 +378,151 @@ func run(symbol_table : SymbolTable) -> bool:
 					_data += line + "\n"
 					i += 1
 	
+	if !_imported_sub_resources_code.is_empty():
+		if last_sub_resource_pos == -1:
+			if _scene_data.get_ext_resource_count() == 0:
+				last_sub_resource_pos = 1
+			else:
+				last_sub_resource_pos = last_ext_resource_pos
+		_data = _data.insert(last_sub_resource_pos, _imported_sub_resources_code)
+	if !_imported_ext_resources_code.is_empty():
+		if last_ext_resource_pos == -1:
+			last_ext_resource_pos = 1
+		_data = _data.insert(last_ext_resource_pos, _imported_ext_resources_code)
+	
+	if !_imported_sub_resources_code.is_empty() or !_imported_ext_resources_code.is_empty():
+		if head_line.contains("load_steps="):
+			var head_parts : PackedStringArray = head_line.split(" ", false)
+			head_line = head_parts[0]
+			var part_i : int = 1
+			while part_i < head_parts.size():
+				var part : String = head_parts[part_i]
+				part_i += 1
+				
+				if part.begins_with("load_steps="):
+					head_line += " load_steps=" + str(_ext_resources_count + _sub_resources_count + 1)
+				else:
+					head_line += " "+part
+		
+		else:
+			var head_slice : PackedStringArray = head_line.split(" ", false, 1)
+			head_line = head_slice[0] + " load_steps=" + str(_ext_resources_count + _sub_resources_count + 1) + " " + head_slice[1]
+	
+	_data = head_line + '\n' + _data
 	_data = _data.strip_edges(false, true) + "\n"
 	
 	return true
+
+
+func recursive_property_inject(node_path : String, scene_data : PropertyTree.SceneData) -> Dictionary:
+	# Rewrite export vars from instantiated scenes to the parent scenes
+	if !scene_data.has_dependency(node_path):
+		return {}
+	
+	var result : Dictionary = {}
+	
+	var inst_scene_path_root : String = scene_data.get_dependent_root(node_path)
+	var inst_scene : String = scene_data.get_dependency(node_path)
+	var inst_scene_relative_path : String = node_path.substr(inst_scene_path_root.length()+1)
+	
+	if inst_scene_relative_path.is_empty():
+		inst_scene_relative_path = '.'
+	else:
+		inst_scene_relative_path = './' + inst_scene_relative_path
+	
+	var ext_scene_data : PropertyTree.SceneData = _property_tree.get_scene(inst_scene)
+	
+	for key in ext_scene_data.get_properties(inst_scene_relative_path):
+		result[key] = ext_scene_data.get_property(inst_scene_relative_path, key)
+	
+	result.merge(recursive_property_inject(inst_scene_relative_path, ext_scene_data), false)
+	
+	return result
+
+
+func import_property(property : PropertyTree.ResourceProperty) -> String:
+	if property is PropertyTree.ResourcePropertyExtRef:
+		var prop_ext_resource : PropertyTree.ExtResource = property.ext_res.get_ref() as PropertyTree.ExtResource
+		var old_id : String = prop_ext_resource.id.to_string()
+		
+		# External references can be reused and optimised, check for it
+		if _ext_resources_by_uid.has(prop_ext_resource.uid):
+			_Logger.write('Reused ExtResource "' + old_id + '" as existing "' + _ext_resources_by_uid[prop_ext_resource.uid].id.to_string() + '"')
+			return _ext_resources_by_uid[prop_ext_resource.uid].to_ref_string()
+		elif _imported_ext_resources_by_uid.has(prop_ext_resource.uid):
+			_Logger.write('Reused ExtResource "' + old_id + '" as existing "' + _imported_ext_resources_by_uid[prop_ext_resource.uid].id.to_string() + '" (already imported)')
+			return _imported_ext_resources_by_uid[prop_ext_resource.uid].to_ref_string()
+		
+		# If not, import it. Follow ID schema
+		else:
+			prop_ext_resource = prop_ext_resource.duplicate()  # Create a copy
+			_ext_resources_count += 1  # Increment resource counter name
+			prop_ext_resource.id.set_name(str(_ext_resources_count))  # Update copy's name
+			_imported_ext_resources_by_uid[prop_ext_resource.uid] = prop_ext_resource  # Save the copy for reuse if possible
+			_imported_ext_resources_code += prop_ext_resource.to_string()+'\n'  # Add the copied resource for insertion into the scene
+			_Logger.write('Imported ExtResource "' + old_id + '" under "' + _imported_ext_resources_by_uid[prop_ext_resource.uid].id.to_string() + '"')
+			return prop_ext_resource.to_ref_string()
+	
+	elif property is PropertyTree.ResourcePropertySubRef:
+		# These would be harder to optimise so just copy over willy-nilly
+		var prop_sub_resource : PropertyTree.SubResource = property.sub_res.get_ref() as PropertyTree.SubResource
+		var old_id : String = prop_sub_resource.id.to_string()
+		prop_sub_resource = prop_sub_resource.duplicate()  # Create a copy
+		_sub_resources_count += 1  # Increment counter just for load_steps
+		
+		# There is an ID conflict! Resolve
+		if _sub_resources_by_id.has(old_id) or _imported_sub_resources_by_id.has(old_id):
+			var conflict_sub : PropertyTree.SubResource
+			
+			if _sub_resources_by_id.has(old_id):
+				conflict_sub = _sub_resources_by_id[old_id] as PropertyTree.SubResource
+			else:
+				conflict_sub = _imported_sub_resources_by_id[old_id] as PropertyTree.SubResource
+			
+			# The conflict is to the same SubResource, easy reuse
+			if conflict_sub.same_ref(prop_sub_resource):
+				_Logger.write('Reused SubResource "' + old_id + '" (possibly already imported)')
+				return prop_sub_resource.to_ref_string()
+			
+			# The conflict is to a different SubResource, but fundamentally the same content
+			# The ID could be mismatched
+			# NOTE: this might cause issues since we expect SubResources to be independently unique despite being the same
+			#elif _imported_sub_resources_by_hash.has(prop_sub_resource.get_hash()):
+				#var similar_sub : PropertyTree.SubResource = _imported_sub_resources_by_hash[prop_sub_resource.get_hash()] as PropertyTree.SubResource
+				#if similar_sub.equal(prop_sub_resource):
+					#_Logger.write('Reused SubResource "' + old_id + '" as "' + similar_sub.id.to_string() + '" (possibly already imported)')
+					#return similar_sub.to_ref_string()
+			
+			# Generate new hash name
+			else:
+				var random := RandomNumberGenerator.new()
+				random.seed = prop_sub_resource.get_hash() + prop_sub_resource.get_properties().size() + _seed
+				var random_letters := "0123456789abcdefghijklmnopqrstuvxyz"
+				var new_hash : String = ""
+				for _i in range(5):
+					new_hash += random_letters[random.randi_range(0, random_letters.length()-1)]
+				prop_sub_resource.id.set_hash(new_hash)
+				_Logger.write('Imported SubResource "' + old_id + '" as "' + prop_sub_resource.id.to_string() + '"')
+		
+		# No ID issues with importing
+		else:
+			_Logger.write('Imported SubResource "' + prop_sub_resource.id.to_string() + '"')
+		
+		_imported_sub_resources_by_id[prop_sub_resource.id.to_string()] = prop_sub_resource
+		var sub_res_code = prop_sub_resource.to_string()+'\n'  # Add the copied resource for insertion into the scene
+		
+		for sub_prop_key in prop_sub_resource.get_properties():
+			var sub_prop : PropertyTree.ResourceProperty = prop_sub_resource.get_property(sub_prop_key)
+			var sub_prop_val : String = import_property(sub_prop)
+			sub_res_code += sub_prop_key+' = '+sub_prop_val+'\n'
+		
+		_imported_sub_resources_code += '\n'+sub_res_code
+		
+		return prop_sub_resource.to_ref_string()
+	
+	else:
+		# Any other property is just a plain value
+		return property.make_string()
 
 
 func get_dependencies(source_data : String) -> Array[String]:

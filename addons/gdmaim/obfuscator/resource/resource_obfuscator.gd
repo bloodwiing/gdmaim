@@ -5,6 +5,7 @@ const _Logger := preload("../../logger.gd")
 const _Settings := preload("../../settings.gd")
 const SymbolTable := preload("../symbol_table.gd")
 const PropertyTree := preload("property_tree.gd")
+const BlockReader := preload("../block_reader.gd")
 
 var path : String
 
@@ -42,11 +43,61 @@ func _parse_property(token : String) -> PropertyTree.ResourceProperty:
 		var prop := PropertyTree.ResourcePropertyExtRef.new(ref_id)
 		prop.ext_res = weakref(_scene_data.get_ext_resource(ref_id))
 		return prop
+	
 	elif token.begins_with('SubResource("'):
 		ref_id = _get_string_value(token)
 		var prop := PropertyTree.ResourcePropertySubRef.new(ref_id)
 		prop.sub_res = weakref(_scene_data.get_sub_resource(ref_id))
 		return prop
+	
+	elif token.begins_with('Array[') or token.begins_with('['):
+		var type = null
+		var list_start := 0
+		if token.begins_with('Array['):
+			var end : int = token.find(']')
+			type = _parse_property(token.substr(6, end-6))  # Array[ ... ]
+			list_start = token.find('[', end)
+		var list_end : int = token.rfind(']')
+		
+		var prop := PropertyTree.ResourcePropertyArray.new()
+		prop.type = type
+		
+		var list_blocks : BlockReader = BlockReader.new(token.substr(list_start+1, list_end-list_start-1), ', ', false)
+		
+		var block_idx : int = 0
+		while block_idx < list_blocks.size():
+			prop.add_item(_parse_property(list_blocks.get_block(block_idx)))
+			block_idx += 1
+		
+		return prop
+	
+	elif token.begins_with('Dictionary[') or token.begins_with('{'):
+		var key_type = null
+		var value_type = null
+		var dict_start := 0
+		if token.begins_with('Dictionary['):
+			var end : int = token.find(']')
+			var middle : int = token.find(',')
+			key_type = _parse_property(token.substr(11, middle-11))  # Dictionary[ ... ,
+			value_type = _parse_property(token.substr(middle+2, end-middle-2))  # , ... ]
+			dict_start = token.find('{', end)
+		var dict_end : int = token.rfind('}')
+		
+		var prop := PropertyTree.ResourcePropertyDictionary.new()
+		prop.key_type = key_type
+		prop.value_type = value_type
+		
+		var dict_blocks : BlockReader = BlockReader.new(token.substr(dict_start+2, dict_end-dict_start-3), ',\n', false)
+		
+		var block_idx : int = 0
+		while block_idx < dict_blocks.size():
+			var split : PackedStringArray = dict_blocks.get_block(block_idx).split(': ', true, 1)
+			block_idx += 1
+			if split.size() < 2: continue
+			prop.add_item(_parse_property(split[0]), _parse_property(split[1]))
+		
+		return prop
+	
 	else:
 		return PropertyTree.ResourceProperty.new(token)
 
@@ -60,10 +111,10 @@ func parse(source_data : String, property_tree : PropertyTree) -> void:
 	
 	_scene_data = property_tree.get_scene(path)
 	
-	var lines : PackedStringArray = _source_data.split("\n")
+	var blocks : BlockReader = BlockReader.new(_source_data, '\n', true)
 	var i : int = 0
-	while i < lines.size():
-		var line : String = lines[i]
+	while i < blocks.size():
+		var line : String = blocks.get_block(i)
 		
 		if line.begins_with("[ext_resource"):
 			var tokens : PackedStringArray = line.split(" ", false)
@@ -133,11 +184,11 @@ func parse(source_data : String, property_tree : PropertyTree) -> void:
 			
 			var j : int = i + 1
 			
-			while j < lines.size():
-				if lines[j].begins_with('['):
+			while j < blocks.size():
+				if blocks.get_block(j).begins_with('['):
 					break
 				
-				line = lines[j]
+				line = blocks.get_block(j)
 				j += 1
 				
 				tokens = line.split(" = ", false, 1)
@@ -187,11 +238,11 @@ func parse(source_data : String, property_tree : PropertyTree) -> void:
 			
 			var j : int = i + 1
 			
-			while j < lines.size():
-				if lines[j].begins_with('['):
+			while j < blocks.size():
+				if blocks.get_block(j).begins_with('['):
 					break
 				
-				line = lines[j]
+				line = blocks.get_block(j)
 				j += 1
 				
 				tokens = line.split(" = ", false, 1)
@@ -236,12 +287,12 @@ func run(symbol_table : SymbolTable) -> bool:
 	var last_ext_resource_pos : int = -1
 	var last_sub_resource_pos : int = -1
 	
-	var lines : PackedStringArray = _source_data.split("\n")
-	var head_line = lines[0]
+	var blocks : BlockReader = BlockReader.new(_source_data, '\n', true)
+	var head_line = blocks.get_block(0) if !blocks.is_empty() else ""
 	
 	var i : int = 1
-	while i < lines.size():
-		var line : String = lines[i]
+	while i < blocks.size():
+		var line : String = blocks.get_block(i)
 		if line.begins_with("\""):
 			_data += line + "\n"
 			i += 1
@@ -316,13 +367,13 @@ func run(symbol_table : SymbolTable) -> bool:
 			var j : int = i
 			var script_i : int = i-1
 			var overwritten_keys : Dictionary = {}  # bootleg set
-			while j < lines.size():
-				if lines[j].begins_with("["):
+			while j < blocks.size():
+				if blocks.get_block(j).begins_with("["):
 					break
 				
-				tmp_lines += lines[j] + "\n"
+				tmp_lines += blocks.get_block(j) + "\n"
 				
-				tokens = lines[j].split(" = ", false, 1)
+				tokens = blocks.get_block(j).split(" = ", false, 1)
 				if tokens.size() == 2:
 					if tokens[0] == "script":
 						has_script = true
@@ -340,16 +391,16 @@ func run(symbol_table : SymbolTable) -> bool:
 					var prop : PropertyTree.ResourceProperty = merge_props[key]
 					var value : String = import_property(prop)
 					
-					lines.insert(script_i+1, key+" = "+value)
+					blocks.insert_block(script_i+1, key+" = "+value)
 			
 			if !has_script:
 				_data += tmp_lines
 				i = j
 			else:
-				j = mini(j, lines.size())
+				j = mini(j, blocks.size())
 				
 				while i < j:
-					line = lines[i]
+					line = blocks.get_block(i)
 					tokens = line.split(" = ", false, 1)
 					if tokens.size() == 2:
 						if tokens[1].begins_with("NodePath(") and tokens[1].contains(":"):
@@ -519,6 +570,60 @@ func import_property(property : PropertyTree.ResourceProperty) -> String:
 		_imported_sub_resources_code += '\n'+sub_res_code
 		
 		return prop_sub_resource.to_ref_string()
+	
+	elif property is PropertyTree.ResourcePropertyArray:
+		# Handle and check the type and items
+		var array_type := ""
+		if property.type != null:
+			array_type = import_property(property.type)
+		
+		var result = "["
+		
+		if array_type != "":
+			result = "Array["+array_type+"](["
+		
+		if !property.is_empty():
+			result += import_property(property.get_item(0))
+			var item_idx := 1
+			while item_idx < property.size():
+				result += ', '+import_property(property.get_item(item_idx))
+				item_idx += 1
+		
+		result += "]"
+		if array_type != "":
+			result += ")"
+		
+		return result
+	
+	elif property is PropertyTree.ResourcePropertyDictionary:
+		# Handle and check the type and items
+		var dict_key_type := ""
+		var dict_value_type := ""
+		if property.key_type != null:
+			dict_key_type = import_property(property.key_type)
+		if property.value_type != null:
+			dict_value_type = import_property(property.value_type)
+		
+		var result = "["
+		
+		if dict_value_type != "":
+			result = "Dictionary["+dict_key_type+", "+dict_value_type+"]({"
+		
+		if !property.is_empty():
+			var keys : Array = property.keys()
+			result += '\n'+import_property(keys[0])+': '+import_property(property.get_item(keys[0]))
+			var key_idx := 1
+			while key_idx < keys.size():
+				var key = keys[key_idx]
+				result += ',\n'+import_property(key)+': '+import_property(property.get_item(key))
+				key_idx += 1
+			result += '\n'
+		
+		result += "}"
+		if dict_value_type != "":
+			result += ")"
+		
+		return result
 	
 	else:
 		# Any other property is just a plain value

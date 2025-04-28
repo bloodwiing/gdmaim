@@ -124,7 +124,78 @@ class ResourcePropertyExtRef extends ResourceProperty:
 		return 'ExtResource("' + get_value() + '")'
 
 
-# TODO: Support Array[]([]) and Dictionary[,]({})
+class ResourcePropertyArray extends ResourceProperty:
+	var type : ResourceProperty = null
+	var list : Array[ResourceProperty]
+	
+	func _init() -> void:
+		super("")
+	
+	func add_item(item : ResourceProperty) -> void:
+		list.append(item)
+	
+	func size() -> int:
+		return list.size()
+	
+	func is_empty() -> bool:
+		return list.is_empty()
+	
+	func get_item(index : int) -> ResourceProperty:
+		return list[index]
+	
+	func make_string() -> String:
+		var l_str : String = ""
+		
+		if !list.is_empty():
+			l_str = list[0].make_string()
+			var i : int = 1
+			while i < list.size():
+				l_str += ', '+list[i].make_string()
+				i+=1
+		
+		if type == null:
+			return '['+l_str+']'
+		return 'Array['+type.make_string()+'](['+l_str+'])'
+
+
+class ResourcePropertyDictionary extends ResourceProperty:
+	var key_type : ResourceProperty = null
+	var value_type : ResourceProperty = null
+	var dict : Dictionary[ResourceProperty, ResourceProperty]
+	
+	func _init() -> void:
+		super("")
+	
+	func add_item(key : ResourceProperty, value : ResourceProperty) -> void:
+		dict[key] = value
+	
+	func size() -> int:
+		return dict.size()
+	
+	func is_empty() -> bool:
+		return dict.is_empty()
+	
+	func get_item(key : ResourceProperty) -> ResourceProperty:
+		return dict[key]
+	
+	func keys() -> Array:
+		return dict.keys()
+	
+	func make_string() -> String:
+		var d_str : String = ""
+		
+		if !dict.is_empty():
+			var keys : Array[ResourceProperty] = dict.keys()
+			d_str = '\n'+keys[0].make_string()+': '+dict[keys[0]].make_string()
+			var i : int = 1
+			while i < keys.size():
+				d_str += ',\n'+keys[i].make_string()+': '+dict[keys[i]].make_string()
+				i+=1
+			d_str += '\n'
+		
+		if key_type == null or value_type == null:
+			return '{'+d_str+'}'
+		return 'Dictionary['+key_type.make_string()+', '+value_type.make_string()+']({'+d_str+'})'
 
 
 class SceneData:

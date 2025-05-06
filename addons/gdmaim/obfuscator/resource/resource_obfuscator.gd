@@ -98,6 +98,11 @@ func _parse_property(token : String) -> PropertyTree.ResourceProperty:
 		
 		return prop
 	
+	elif token.begins_with('NodePath("'):
+		var path := _get_string_value(token)
+		var prop := PropertyTree.ResourcePropertyNodePath.new(path)
+		return prop
+	
 	else:
 		return PropertyTree.ResourceProperty.new(token)
 
@@ -327,7 +332,8 @@ func run(symbol_table : SymbolTable) -> bool:
 		elif line.begins_with("[sub_resource"):
 			last_sub_resource_pos = _data.length()-1
 		
-		_data += line + "\n"
+		if !line.begins_with('[node'):
+			_data += line + "\n"
 		i += 1
 		
 		if line.begins_with("[ext_resource"):
@@ -336,8 +342,13 @@ func run(symbol_table : SymbolTable) -> bool:
 		if line.begins_with("[node") or line.begins_with("[sub_resource") or line.begins_with("[resource"):
 			var node_name : String
 			var node_parent : String
+			var node_paths : String
+			var node_extras : String
 			
-			var tokens : PackedStringArray = line.split(" ", false)
+			var tokens_blocks : BlockReader = BlockReader.new(line.substr(1, line.length()-2), " ", false)
+			var tokens : PackedStringArray = tokens_blocks.to_packed_string_array()
+			tokens[0] = '['+tokens[0]
+			tokens[tokens.size()-1] = tokens[tokens.size()-1]+']'
 			var token_i : int = 0
 			while token_i < tokens.size():
 				var token : String = tokens[token_i]
@@ -352,6 +363,12 @@ func run(symbol_table : SymbolTable) -> bool:
 					while !token.ends_with('"') and token_j < tokens.size(): token += ' ' + tokens[token_j]; token_j += 1;
 					node_parent = _get_string_value(token)
 					if node_parent.is_empty(): continue
+				elif token.begins_with('node_paths=PackedStringArray('):
+					var paths_start := token.find('"')
+					var paths_end := token.rfind('"')
+					node_paths += token.substr(paths_start, paths_end-paths_start+1)
+				elif !token.begins_with('['):
+					node_extras += ' '+token
 				
 				token_i += 1
 			
@@ -393,6 +410,16 @@ func run(symbol_table : SymbolTable) -> bool:
 					var prop : PropertyTree.ResourceProperty = merge_props[key]
 					var value : String = import_property(prop)
 					
+					if prop is PropertyTree.ResourcePropertyNodePath:
+						var node_path_key : String = key
+						var new_symbol : SymbolTable.Symbol = symbol_table.find_global_symbol(key)
+						if new_symbol:
+							node_path_key = str(new_symbol.name)
+						
+						if !node_paths.is_empty():
+							node_paths += ', '
+						node_paths += '"'+node_path_key+'"'
+					
 					j += 1
 					
 					logger_i_offset = 0
@@ -402,6 +429,18 @@ func run(symbol_table : SymbolTable) -> bool:
 						logger_i_offset += _imported_sub_resources_code.count('\n')
 					
 					blocks.insert_block(script_i+1, key+" = "+value)
+				
+				line = '[node name="' + node_name + '"'
+				if !node_parent.is_empty():
+					line += ' parent="' + node_parent + '"'
+				if !node_paths.is_empty():
+					line += ' node_paths=PackedStringArray(' + node_paths + ')'
+				line += node_extras
+				if !line.ends_with(']'):
+					line += ']'
+			
+			if line.begins_with("[node"):
+				_data += line + "\n"
 			
 			if !has_script:
 				_data += tmp_lines

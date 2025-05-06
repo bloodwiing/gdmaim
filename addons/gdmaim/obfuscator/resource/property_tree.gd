@@ -198,6 +198,11 @@ class ResourcePropertyDictionary extends ResourceProperty:
 		return 'Dictionary['+key_type.make_string()+', '+value_type.make_string()+']({'+d_str+'})'
 
 
+class ResourcePropertyNodePath extends ResourceProperty:
+	func make_string() -> String:
+		return 'NodePath("' + get_value() + '")'
+
+
 class SceneData:
 	var _nodes : Dictionary
 	var _ext_resources : Dictionary

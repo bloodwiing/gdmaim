@@ -393,6 +393,8 @@ func run(symbol_table : SymbolTable) -> bool:
 					var prop : PropertyTree.ResourceProperty = merge_props[key]
 					var value : String = import_property(prop)
 					
+					j += 1
+					
 					logger_i_offset = 0
 					if !_imported_ext_resources_code.is_empty():
 						logger_i_offset += _imported_ext_resources_code.count('\n')

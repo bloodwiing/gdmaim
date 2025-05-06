@@ -290,6 +290,8 @@ func run(symbol_table : SymbolTable) -> bool:
 	var blocks : BlockReader = BlockReader.new(_source_data, '\n', true)
 	var head_line = blocks.get_block(0) if !blocks.is_empty() else ""
 	
+	var logger_i_offset : int = 0
+	
 	var i : int = 1
 	while i < blocks.size():
 		var line : String = blocks.get_block(i)
@@ -320,7 +322,7 @@ func run(symbol_table : SymbolTable) -> bool:
 					var new_symbol : SymbolTable.Symbol = symbol_table.find_global_symbol(name)
 					if new_symbol:
 						line = _replace_first(line, name, str(new_symbol.name))
-						_Logger.write(str(i+1) + " found symbol '" + name + "' = " + str(new_symbol.name))
+						_Logger.write(str(i+1+logger_i_offset) + " found symbol '" + name + "' = " + str(new_symbol.name))
 		
 		elif line.begins_with("[sub_resource"):
 			last_sub_resource_pos = _data.length()-1
@@ -378,7 +380,7 @@ func run(symbol_table : SymbolTable) -> bool:
 					if tokens[0] == "script":
 						has_script = true
 						script_i = j
-						_Logger.write(str(i+1) + " found script " + line + " " + tokens[1])
+						_Logger.write(str(i+1+logger_i_offset) + " found script " + line + " " + tokens[1])
 					overwritten_keys[tokens[0]] = null
 				
 				j += 1
@@ -390,6 +392,12 @@ func run(symbol_table : SymbolTable) -> bool:
 					if overwritten_keys.has(key): continue
 					var prop : PropertyTree.ResourceProperty = merge_props[key]
 					var value : String = import_property(prop)
+					
+					logger_i_offset = 0
+					if !_imported_ext_resources_code.is_empty():
+						logger_i_offset += _imported_ext_resources_code.count('\n')
+					if !_imported_sub_resources_code.is_empty():
+						logger_i_offset += _imported_sub_resources_code.count('\n')
 					
 					blocks.insert_block(script_i+1, key+" = "+value)
 			
@@ -413,18 +421,18 @@ func run(symbol_table : SymbolTable) -> bool:
 							tokens[1] = 'NodePath("' + new_path + '")'
 							line = tokens[0] + " = " + tokens[1]
 							if node_path_ref != new_path:
-								_Logger.write(str(i+1) + " found node path '" + node_path_ref + "' = " + new_path)
+								_Logger.write(str(i+1+logger_i_offset) + " found node path '" + node_path_ref + "' = " + new_path)
 						
 						var new_symbol : SymbolTable.Symbol = symbol_table.find_global_symbol(tokens[0])
 						if new_symbol:
 							line = str(new_symbol.name) + " = " + tokens[1]
-							_Logger.write(str(i+1) + " found export var '" + tokens[0] + "' = " + str(new_symbol.name))
+							_Logger.write(str(i+1+logger_i_offset) + " found export var '" + tokens[0] + "' = " + str(new_symbol.name))
 					elif line.begins_with('"method":'):
 						var method : String = _read_string(line.trim_prefix('"method":'))
 						var new_symbol : SymbolTable.Symbol = symbol_table.find_global_symbol(method)
 						if new_symbol:
 							line = '"method": &"' + str(new_symbol.name) + '"'
-							_Logger.write(str(i+1) + " found method '" + method + "' = " + str(new_symbol.name))
+							_Logger.write(str(i+1+logger_i_offset) + " found method '" + method + "' = " + str(new_symbol.name))
 					
 					_data += line + "\n"
 					i += 1

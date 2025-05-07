@@ -128,3 +128,7 @@ func size() -> int:
 
 func is_empty() -> bool:
 	return _list.is_empty()
+
+
+func to_packed_string_array() -> PackedStringArray:
+	return PackedStringArray(_list)

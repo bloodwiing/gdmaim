@@ -16,7 +16,7 @@ class ResourceID:
 	static func parse(id : String) -> ResourceID:
 		var parts = id.split('_', false, 1)
 		if parts.size() != 2:
-			push_error("Could not parse ResourceID: ", id)
+			return ResourceID.new(parts[0], "")
 		return ResourceID.new(parts[0], parts[1])
 	
 	func set_name(name : String) -> void:
@@ -32,6 +32,8 @@ class ResourceID:
 		return _hash
 	
 	func _to_string() -> String:
+		if _hash.is_empty():
+			return _name
 		return _name+'_'+_hash
 
 
